@@ -113,6 +113,65 @@ class DeleteResponse(BaseModel):
     file_removed: bool
 
 
+# ---------- Evaluation ----------
+
+class EvalMetric(str, Enum):
+    FAITHFULNESS = "faithfulness"            # is the answer grounded in retrieved context?
+    ANSWER_RELEVANCY = "answer_relevancy"    # does the answer address the question?
+    CONTEXT_PRECISION = "context_precision"  # are the retrieved chunks relevant/ranked well?
+    CONTEXT_RECALL = "context_recall"        # did retrieval find everything the answer needs?
+
+
+class GoldenItem(BaseModel):
+    question: str
+    ground_truth: str
+    category: str | None = None
+
+
+class GoldenDatasetResponse(BaseModel):
+    description: str
+    size: int
+    items: list[GoldenItem]
+
+
+class EvalRequest(BaseModel):
+    strategies: list[RetrievalStrategy] = Field(
+        default_factory=lambda: [RetrievalStrategy.HYBRID, RetrievalStrategy.ADVANCED]
+    )
+    metrics: list[EvalMetric] = Field(
+        default_factory=lambda: list(EvalMetric)
+    )
+    num_questions: int | None = Field(
+        None, ge=1, le=50, description="Cap on golden questions (None = all)"
+    )
+    top_k: int = Field(5, ge=1, le=20)
+    use_rerank: bool = True
+
+
+class PerQuestionResult(BaseModel):
+    question: str
+    answer: str
+    ground_truth: str
+    num_contexts: int
+    scores: dict[str, float | None]         # metric name -> score (None if not computable)
+
+
+class StrategyEvalResult(BaseModel):
+    strategy: str
+    num_questions: int
+    aggregate: dict[str, float | None]      # metric name -> mean score
+    per_question: list[PerQuestionResult]
+    avg_latency_ms: float
+
+
+class EvalResponse(BaseModel):
+    metrics: list[str]
+    dataset_size: int
+    num_questions: int
+    results: list[StrategyEvalResult]
+    total_latency_ms: float
+
+
 # ---------- Health ----------
 
 class HealthResponse(BaseModel):

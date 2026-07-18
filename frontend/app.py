@@ -136,6 +136,30 @@ def post_query(question: str) -> tuple[dict | None, str | None]:
     return r.json(), None
 
 
+def get_eval_dataset() -> dict | None:
+    try:
+        r = requests.get(f"{backend()}/evals/dataset", headers=api_headers(), timeout=10)
+        return r.json() if r.ok else None
+    except requests.RequestException:
+        return None
+
+
+def post_eval_run(payload: dict) -> tuple[dict | None, str | None]:
+    try:
+        r = requests.post(
+            f"{backend()}/evals/run", json=payload, headers=api_headers(), timeout=1800
+        )
+    except requests.RequestException as e:
+        return None, f"Backend unreachable: {e}"
+    if not r.ok:
+        try:
+            detail = r.json().get("detail", r.text)
+        except ValueError:
+            detail = r.text
+        return None, f"HTTP {r.status_code}: {detail}"
+    return r.json(), None
+
+
 def post_ingest(files) -> tuple[dict | None, str | None]:
     payload = [("files", (f.name, f.getvalue())) for f in files]
     try:
@@ -265,7 +289,9 @@ with st.sidebar:
 
 # ---------- tabs ----------
 
-tab_chat, tab_dash, tab_docs = st.tabs(["💬 Chat", "📊 Dashboard", "📁 Documents"])
+tab_chat, tab_dash, tab_evals, tab_docs = st.tabs(
+    ["💬 Chat", "📊 Dashboard", "📈 Evals", "📁 Documents"]
+)
 
 
 with tab_chat:
@@ -366,6 +392,108 @@ with tab_dash:
             f"Session metrics only — full traces (per-stage spans, prompts, "
             f"token counts, costs) live in [Logfire]({LOGFIRE_URL})."
         )
+
+
+EVAL_METRICS = ["faithfulness", "answer_relevancy", "context_precision", "context_recall"]
+
+
+def _fmt(v) -> float | None:
+    return round(v, 3) if isinstance(v, (int, float)) else None
+
+
+with tab_evals:
+    st.subheader("📈 RAG Evaluation — RAGAS")
+    st.caption(
+        "Run the selected strategies against the golden Q&A dataset and score them "
+        "with RAGAS. All scores are 0–1, higher is better. Faithfulness = answer "
+        "grounded in context; answer relevancy = answer addresses the question; "
+        "context precision/recall = retrieval quality vs. the ground truth."
+    )
+
+    ds = get_eval_dataset()
+    if not ds:
+        st.error("Could not load the golden dataset — is the backend running?")
+    else:
+        st.markdown(f"**Golden dataset:** {ds['size']} questions · {ds['description']}")
+        with st.expander("📋 View golden dataset"):
+            st.dataframe(pd.DataFrame(ds["items"]), use_container_width=True, hide_index=True)
+
+        c1, c2 = st.columns(2)
+        eval_strategies = c1.multiselect(
+            "Strategies to compare", STRATEGIES, default=["hybrid", "advanced"]
+        )
+        eval_metrics = c2.multiselect(
+            "Metrics", EVAL_METRICS, default=EVAL_METRICS
+        )
+        c3, c4, c5 = st.columns(3)
+        num_q = c3.slider("Questions", 1, ds["size"], min(3, ds["size"]))
+        eval_top_k = c4.slider("Top K", 1, 10, 5, key="eval_top_k")
+        eval_rerank = c5.toggle("Rerank", value=True, key="eval_rerank")
+
+        est = len(eval_strategies) * num_q * (1 + len(eval_metrics))
+        st.caption(
+            f"⏳ ~{est} LLM calls ({len(eval_strategies)} strategies × {num_q} "
+            f"questions × (1 answer + {len(eval_metrics)} metrics)) — can take minutes."
+        )
+
+        if st.button(
+            "▶️ Run evaluation",
+            type="primary",
+            disabled=not (eval_strategies and eval_metrics),
+        ):
+            with st.spinner("Running evaluation… (LLM-heavy, please wait)"):
+                result, error = post_eval_run(
+                    {
+                        "strategies": eval_strategies,
+                        "metrics": eval_metrics,
+                        "num_questions": num_q,
+                        "top_k": eval_top_k,
+                        "use_rerank": eval_rerank,
+                    }
+                )
+            if error:
+                st.error(error)
+            else:
+                st.session_state.eval_results = result
+
+        result = st.session_state.get("eval_results")
+        if result:
+            metrics = result["metrics"]
+            st.divider()
+            st.markdown(
+                f"### Results — {result['num_questions']} questions · "
+                f"{result['total_latency_ms'] / 1000:.1f}s total"
+            )
+
+            # aggregate comparison table (strategies × metrics)
+            rows = []
+            for r in result["results"]:
+                row = {"strategy": r["strategy"]}
+                row.update({m: _fmt(r["aggregate"].get(m)) for m in metrics})
+                row["avg_latency_ms"] = r["avg_latency_ms"]
+                rows.append(row)
+            agg_df = pd.DataFrame(rows).set_index("strategy")
+
+            st.markdown("**Aggregate scores** (mean per metric — best per column is the winner)")
+            st.dataframe(agg_df, use_container_width=True)
+
+            # grouped bar chart: x = metric, series = strategy
+            st.markdown("**Per-metric comparison**")
+            chart_df = agg_df[metrics].T  # metrics on x-axis, strategies as series
+            st.bar_chart(chart_df, height=320, stack=False)
+
+            # per-question breakdown
+            st.markdown("**Per-question breakdown**")
+            for r in result["results"]:
+                with st.expander(f"🔍 {r['strategy']} — {r['num_questions']} questions"):
+                    pq_rows = []
+                    for pq in r["per_question"]:
+                        prow = {"question": pq["question"], "ctx": pq["num_contexts"]}
+                        prow.update({m: _fmt(pq["scores"].get(m)) for m in metrics})
+                        pq_rows.append(prow)
+                    st.dataframe(
+                        pd.DataFrame(pq_rows), use_container_width=True, hide_index=True
+                    )
 
 
 def get_documents() -> list[dict]:

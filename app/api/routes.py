@@ -20,6 +20,9 @@ from app.models.schemas import (
     DeleteResponse,
     DocumentInfo,
     DocumentsResponse,
+    EvalRequest,
+    EvalResponse,
+    GoldenDatasetResponse,
     HealthResponse,
     IngestedFile,
     IngestResponse,
@@ -45,6 +48,24 @@ async def apply_key_overrides(
 router = APIRouter(dependencies=[Depends(apply_key_overrides)])
 
 UPLOAD_DIR = Path("data/uploads")
+
+
+def _raise_for_openai(e: openai.OpenAIError) -> None:
+    """Map OpenAI SDK errors to clean HTTP responses (no raw 500 tracebacks)."""
+    if isinstance(e, openai.AuthenticationError):
+        raise HTTPException(status_code=401, detail="Invalid OpenAI API key")
+    if isinstance(e, openai.APIConnectionError):
+        raise HTTPException(
+            status_code=503,
+            detail="Could not reach OpenAI — check your internet/DNS connection "
+            "and retry.",
+        )
+    if isinstance(e, openai.RateLimitError):
+        raise HTTPException(
+            status_code=429,
+            detail="OpenAI rate limit or quota exceeded — please retry shortly.",
+        )
+    raise HTTPException(status_code=502, detail=f"Upstream LLM error: {type(e).__name__}")
 
 
 def _rerank_enabled() -> bool:
@@ -132,8 +153,8 @@ async def query(request: QueryRequest) -> QueryResponse:
         )
     try:
         return run_query(request)
-    except openai.AuthenticationError:
-        raise HTTPException(status_code=401, detail="Invalid OpenAI API key")
+    except openai.OpenAIError as e:
+        _raise_for_openai(e)
 
 
 @router.get("/documents", response_model=DocumentsResponse)
@@ -182,6 +203,40 @@ async def delete_document(filename: str) -> DeleteResponse:
         graph_chunks_deleted=graph_deleted,
         file_removed=file_removed,
     )
+
+
+@router.get("/evals/dataset", response_model=GoldenDatasetResponse)
+async def eval_dataset() -> GoldenDatasetResponse:
+    """The golden Q&A set used for evaluation."""
+    from app.evaluation import dataset
+
+    return GoldenDatasetResponse(
+        description=dataset.description(),
+        size=dataset.size(),
+        items=dataset.golden_items(),
+    )
+
+
+# NOTE: sync `def` on purpose — FastAPI runs it in a threadpool, so RAGAS can
+# spin up its own asyncio loop without clashing with the server's event loop.
+@router.post("/evals/run", response_model=EvalResponse)
+def run_evals(request: EvalRequest) -> EvalResponse:
+    """Evaluate the selected strategies against the golden dataset with RAGAS.
+
+    Slow and LLM-heavy: ~(strategies x questions x (1 answer + metrics)) calls.
+    """
+    if not request.strategies:
+        raise HTTPException(status_code=400, detail="Select at least one strategy")
+    if document_count() == 0:
+        raise HTTPException(
+            status_code=409, detail="No documents indexed — ingest first."
+        )
+    from app.evaluation.runner import run_evaluation
+
+    try:
+        return run_evaluation(request)
+    except openai.OpenAIError as e:
+        _raise_for_openai(e)
 
 
 @router.get("/health", response_model=HealthResponse)
