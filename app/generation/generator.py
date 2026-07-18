@@ -26,14 +26,20 @@ Question: {question}
 Answer:"""
 
 
-@lru_cache
-def _llm() -> ChatOpenAI:
+@lru_cache(maxsize=8)
+def _llm_for(api_key: str) -> ChatOpenAI:
     settings = get_settings()
     return ChatOpenAI(
         model=settings.openai_chat_model,
-        api_key=settings.openai_api_key,
+        api_key=api_key,
         temperature=0.0,
     )
+
+
+def _llm() -> ChatOpenAI:
+    from app.runtime_keys import effective_openai_key
+
+    return _llm_for(effective_openai_key())
 
 
 def _format_context(chunks: list[SourceChunk]) -> str:

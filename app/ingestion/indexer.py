@@ -16,22 +16,24 @@ from app.ingestion.chunking import chunk_documents
 from app.ingestion.loaders import load_file
 
 
-@lru_cache
-def get_vectorstore() -> Chroma:
+@lru_cache(maxsize=8)
+def _vectorstore_for(api_key: str) -> Chroma:
+    from app.ingestion.embedder import _embeddings_for
+
     settings = get_settings()
     return Chroma(
         collection_name=settings.chroma_collection,
-        embedding_function=_embeddings(),
+        embedding_function=_embeddings_for(api_key),
         persist_directory=str(settings.chroma_persist_dir),
         client_settings=ChromaSettings(anonymized_telemetry=False),
         collection_metadata={"hnsw:space": "cosine"},
     )
 
 
-def _embeddings():
-    from app.ingestion.embedder import get_embeddings
+def get_vectorstore() -> Chroma:
+    from app.runtime_keys import effective_openai_key
 
-    return get_embeddings()
+    return _vectorstore_for(effective_openai_key())
 
 
 def index_file(path: Path) -> int:
