@@ -10,7 +10,7 @@ An end-to-end Retrieval-Augmented Generation system built with **OpenAI + Chroma
 | 2. Advanced retrieval | Hybrid+RRF, multi-query, HyDE, self-query, compression, Cohere rerank | ✅ |
 | 2.5 Frontend | Streamlit chatbot + session dashboard + document manager, sidebar API keys | ✅ |
 | 3. Graph RAG | Neo4j entity/relation extraction + graph-augmented retrieval | ✅ |
-| 4. Guardrails | Prompt-injection + topic rails, Presidio PII detection/redaction | ⏳ |
+| 4. Guardrails | Prompt-injection + moderation rails, Presidio PII detection/redaction, grounding check | ✅ |
 | 5. Evals | RAGAS golden dataset, per-strategy comparison | ⏳ |
 | 6. Ship | Custom metrics, Docker, CI | ⏳ |
 
@@ -65,6 +65,23 @@ Then set `NEO4J_URI` / `NEO4J_PASSWORD` in `.env`, restart the API, and re-inges
 ### Generation (`app/generation/`)
 - Answers **only** from retrieved context, with inline `[1]` `[2]` citations mapped to sources; refuses explicitly when context lacks the answer — **why:** grounding + verifiability are the whole point of RAG.
 
+### Guardrails (`app/guardrails/`) — Phase 4
+A defense-in-depth wrapper around the pipeline. **Input rails run before any retrieval/generation** (so a bad request costs nothing); **output rails transform/flag the answer**. Every rail is individually toggleable and degrades gracefully.
+
+| Rail | Stage | Action | Why |
+|---|---|---|---|
+| **Prompt injection** (`injection.py`) | input | **block** | Regex heuristics catch "ignore previous instructions / reveal system prompt / act as / jailbreak" — instant, zero-cost, before tokens are spent |
+| **Moderation** (`moderation.py`) | input | **block** | OpenAI's free moderation endpoint flags hate/violence/self-harm/sexual content |
+| **Input PII** (`pii.py`) | input | flag (or block) | Presidio detects personal data in the question; flagged by default, `BLOCK_ON_INPUT_PII=true` to reject |
+| **Output PII** (`pii.py`) | output | **redact** | Presidio replaces PII in the answer with `<PERSON>`, `<EMAIL_ADDRESS>`, … before it leaves the server |
+| **Grounding** (`grounding.py`) | output | flag | Optional LLM fact-checker verifies the answer is supported by context (off by default — adds a call) |
+
+- **PII entity allowlist**: redaction is scoped to true-identity types (PERSON, EMAIL, PHONE, SSN, credit card, …) and **deliberately excludes** ORGANIZATION/DATE/URL — spaCy tags "OpenAI"/"Transformer"/dates as those, and redacting them would gut legitimate answers. Configurable via `pii_entities`.
+- **Graceful degradation**: if Presidio/spaCy aren't installed, PII rails report `unavailable` and the pipeline runs unaffected. Moderation/grounding fail *open* (logged, treated as pass) so a guardrail outage never takes the API down.
+- Blocked requests return `200` with `blocked: true` and a `guardrails` report (every check + reason) — the UI shows a 🛡️ notice; the API stays uniform. Per-request `use_guardrails: false` opts out.
+
+**Setup:** `pip install presidio-analyzer presidio-anonymizer spacy` then `python -m spacy download en_core_web_sm` (both in `requirements.txt`).
+
 ### Per-request API keys (`app/runtime_keys.py`)
 - Clients can send `X-OpenAI-Api-Key` / `X-Cohere-Api-Key` headers; resolved via request-scoped contextvars with per-key client caches, falling back to `.env`. **Why:** lets the Streamlit UI (or any tenant) bring their own keys without restarting the server — a real multi-tenant SaaS pattern. Invalid keys return a clean `401`.
 
@@ -105,17 +122,17 @@ API docs: http://localhost:8000/docs · UI: http://localhost:8501
 | Endpoint | Description |
 |---|---|
 | `POST /api/v1/ingest` | Upload `.pdf` / `.txt` / `.md` / `.docx` (multipart) |
-| `POST /api/v1/query` | `{"question", "strategy", "top_k", "use_rerank", "use_compression"}` |
+| `POST /api/v1/query` | `{"question", "strategy", "top_k", "use_rerank", "use_compression", "use_guardrails"}` → answer, sources, `blocked`, `guardrails` report, `grounded` |
 | `GET /api/v1/documents` | List indexed files with chunk counts |
 | `DELETE /api/v1/documents/{filename}` | Remove one file everywhere: Chroma chunks, BM25, Neo4j graph data, stored upload |
-| `GET /api/v1/health` | Status, chunks indexed, rerank/graph enabled |
+| `GET /api/v1/health` | Status, chunks indexed, rerank/graph/guardrails status |
 
 Optional headers on any endpoint: `X-OpenAI-Api-Key`, `X-Cohere-Api-Key`.
 
 ## Tests
 
 ```bash
-pytest tests/ -v      # 22 tests: config, schemas, chunking, RRF math, rerank fallback
+pytest tests/ -v      # 45 tests: config, schemas, chunking, RRF, graph, guardrails
 ```
 
 ## Project Structure
@@ -129,7 +146,9 @@ app/
 ├── retrieval/             # dense, hybrid+BM25, fusion(RRF), multi_query,
 │                          # query_expansion(HyDE), self_query, reranker, compression
 ├── generation/            # grounded generation with citations
-├── pipeline.py            # orchestrator: retrieve → rerank → compress → generate
+├── graph/                 # Neo4j client, entity/relation extractor, store, retriever
+├── guardrails/            # injection, moderation, pii (Presidio), grounding, rails
+├── pipeline.py            # orchestrator: guardrails → retrieve → rerank → compress → generate → guardrails
 ├── observability/         # Logfire setup + instrumentation
 └── api/                   # FastAPI app + routes
 frontend/app.py            # Streamlit chat + dashboard + documents

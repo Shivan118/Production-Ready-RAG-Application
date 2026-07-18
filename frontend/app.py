@@ -10,11 +10,78 @@ import pandas as pd
 import requests
 import streamlit as st
 
-st.set_page_config(page_title="RAG End-to-End", page_icon="🔎", layout="wide")
+st.set_page_config(page_title="RAG Chat", page_icon="🔎", layout="wide")
 
 ACCENT = "#2a78d6"  # categorical slot 1 (validated palette)
 LOGFIRE_URL = "https://logfire-us.pydantic.dev/shivan3446/starter-project"
 STRATEGIES = ["advanced", "hybrid", "dense", "multi_query", "hyde", "self_query", "graph"]
+
+USER_AVATAR = "🧑"
+BOT_AVATAR = "🤖"
+SUGGESTIONS = [
+    "What is multi-head attention?",
+    "Summarize the key ideas in my documents",
+    "How does hybrid search work?",
+    "Who are the authors and where do they work?",
+]
+
+# Friendly, ChatGPT-style refusals keyed by the guardrail that fired.
+FRIENDLY_BLOCK = {
+    "prompt_injection": "I can only help with questions about your uploaded "
+    "documents. Mind rephrasing what you'd like to know? 🙂",
+    "moderation": "I'm not able to help with that request. Let's keep things "
+    "focused on your documents.",
+    "input_pii": "For your privacy, please remove personal details (emails, "
+    "phone numbers, etc.) from your message and ask again.",
+}
+
+# --- ChatGPT-like look: centered column, tinted bubbles, avatars, pinned input ---
+st.markdown(
+    """
+    <style>
+    /* leave room for the top toolbar (so tabs aren't clipped) and the
+       bottom-pinned chat input */
+    .block-container { max-width: 820px; padding-top: 3rem; padding-bottom: 7rem; }
+
+    /* make the tab bar clearly visible */
+    div[data-baseweb="tab-list"] { gap: 1.2rem; }
+    button[data-baseweb="tab"] { font-size: 1rem; font-weight: 600; }
+
+    /* chat bubbles */
+    [data-testid="stChatMessage"] {
+        padding: 0.55rem 0.85rem;
+        margin-bottom: 0.4rem;
+        border-radius: 16px;
+    }
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) {
+        background: rgba(42, 120, 214, 0.10);
+    }
+    [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarAssistant"]) {
+        background: rgba(128, 128, 128, 0.08);
+    }
+
+    /* pin the chat input to the bottom, centered over the main content area
+       (main area sits to the right of the ~336px sidebar) */
+    [data-testid="stChatInput"] {
+        position: fixed;
+        bottom: 1.2rem;
+        left: calc(50% + 168px);
+        transform: translateX(-50%);
+        width: min(760px, 80vw);
+        z-index: 100;
+        border-radius: 24px;
+        box-shadow: 0 2px 18px rgba(0, 0, 0, 0.18);
+    }
+    @media (max-width: 900px) {
+        [data-testid="stChatInput"] { left: 50%; width: 92vw; }
+    }
+
+    .stButton button { border-radius: 12px; }
+    footer { visibility: hidden; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -52,6 +119,7 @@ def post_query(question: str) -> tuple[dict | None, str | None]:
         "top_k": st.session_state.top_k,
         "use_rerank": st.session_state.use_rerank,
         "use_compression": st.session_state.use_compression,
+        "use_guardrails": st.session_state.use_guardrails,
     }
     try:
         r = requests.post(
@@ -85,6 +153,54 @@ def post_ingest(files) -> tuple[dict | None, str | None]:
     return r.json(), None
 
 
+# ---------- rendering ----------
+
+def _blocked_message(data: dict) -> str:
+    """Map the failed guardrail to a friendly, ChatGPT-style refusal."""
+    for check in (data.get("guardrails") or {}).get("checks", []):
+        if not check.get("passed", True):
+            return FRIENDLY_BLOCK.get(
+                check["name"],
+                "I can't help with that one — try rephrasing your question "
+                "about your documents.",
+            )
+    return "I can't help with that request."
+
+
+def render_answer(data: dict) -> None:
+    """Render one assistant turn: blocked notice, answer, guardrail badges, sources."""
+    if data.get("blocked"):
+        st.markdown(_blocked_message(data))
+        st.caption("🛡️ Filtered by guardrails")
+        return
+
+    st.markdown(data["answer"])
+
+    top_score = data["sources"][0]["score"] if data["sources"] else 0.0
+    st.caption(
+        f"`{data['retrieval_strategy']}` · {data['latency_ms']:.0f} ms · "
+        f"{len(data['sources'])} sources · top score {top_score}"
+    )
+
+    g = data.get("guardrails") or {}
+    pii_found = g.get("pii_detected") or []
+    if pii_found:
+        st.caption(f"🔒 PII redacted: {', '.join(pii_found)}")
+    grounded = data.get("grounded")
+    if grounded is True:
+        st.caption("✅ Answer grounded in sources")
+    elif grounded is False:
+        st.caption("⚠️ Answer may not be fully supported by sources")
+
+    if data["sources"]:
+        with st.expander("📄 Sources"):
+            for i, s in enumerate(data["sources"], 1):
+                st.markdown(
+                    f"**[{i}] {s['source']}** — score `{s['score']}`\n\n"
+                    f"> {s['content'][:400]}{'…' if len(s['content']) > 400 else ''}"
+                )
+
+
 # ---------- sidebar ----------
 
 with st.sidebar:
@@ -109,6 +225,7 @@ with st.sidebar:
     st.slider("Top K sources", 1, 10, 5, key="top_k")
     st.toggle("Cohere rerank", value=True, key="use_rerank")
     st.toggle("Contextual compression", value=False, key="use_compression")
+    st.toggle("Guardrails", value=True, key="use_guardrails")
 
     st.subheader("🖥️ Backend")
     st.text_input("API URL", value="http://localhost:8000/api/v1", key="backend_url")
@@ -130,6 +247,16 @@ with st.sidebar:
             )
         elif st.session_state.strategy in ("graph", "advanced"):
             st.caption("🕸️ Neo4j not connected — graph retrieval inactive.")
+
+        guard = health["details"].get("guardrails", {})
+        if guard.get("enabled") and st.session_state.use_guardrails:
+            active = [
+                n for n in ("injection", "moderation", "input_pii", "output_pii", "grounding")
+                if guard.get(n)
+            ]
+            st.info(f"🛡️ Guardrails: {', '.join(active)}")
+            if guard.get("pii_backend") != "presidio":
+                st.caption("⚠️ Presidio unavailable — PII rails inactive.")
     else:
         st.error("Backend offline — start it:\n`uvicorn app.api.main:app --reload`")
 
@@ -142,28 +269,42 @@ tab_chat, tab_dash, tab_docs = st.tabs(["💬 Chat", "📊 Dashboard", "📁 Doc
 
 
 with tab_chat:
+    # conversation history
     for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            if msg["role"] == "assistant" and msg.get("meta"):
-                m = msg["meta"]
-                st.caption(
-                    f"`{m['strategy']}` · {m['latency_ms']:.0f} ms · "
-                    f"{m['num_sources']} sources · top score {m['top_score']}"
-                )
-                with st.expander("📄 Sources"):
-                    for i, s in enumerate(msg["sources"], 1):
-                        st.markdown(
-                            f"**[{i}] {s['source']}** — score `{s['score']}`\n\n"
-                            f"> {s['content'][:400]}{'…' if len(s['content']) > 400 else ''}"
-                        )
+        avatar = USER_AVATAR if msg["role"] == "user" else BOT_AVATAR
+        with st.chat_message(msg["role"], avatar=avatar):
+            if msg["role"] == "assistant" and msg.get("data"):
+                render_answer(msg["data"])
+            else:
+                st.markdown(msg["content"])
 
-    if question := st.chat_input("Ask a question about your documents…"):
+    # welcome screen with suggested prompts (only before the first message)
+    if not st.session_state.messages and not st.session_state.get("pending_q"):
+        st.markdown(
+            "<div style='text-align:center; margin-top:6vh; opacity:0.9'>"
+            "<div style='font-size:3.2rem'>🔎</div>"
+            "<h2 style='margin:0.3rem 0'>Ask your documents</h2>"
+            "<p style='color:gray; margin-top:0'>Grounded answers with citations, "
+            "powered by your RAG pipeline.</p></div>",
+            unsafe_allow_html=True,
+        )
+        cols = st.columns(2)
+        for i, suggestion in enumerate(SUGGESTIONS):
+            if cols[i % 2].button(suggestion, use_container_width=True, key=f"sug_{i}"):
+                st.session_state.pending_q = suggestion
+                st.rerun()
+
+    # accept a typed message or a clicked suggestion
+    question = st.chat_input("Message your documents…")
+    if not question and st.session_state.get("pending_q"):
+        question = st.session_state.pop("pending_q")
+
+    if question:
         st.session_state.messages.append({"role": "user", "content": question})
-        with st.chat_message("user"):
+        with st.chat_message("user", avatar=USER_AVATAR):
             st.markdown(question)
 
-        with st.chat_message("assistant"):
+        with st.chat_message("assistant", avatar=BOT_AVATAR):
             with st.spinner(f"Retrieving with `{st.session_state.strategy}`…"):
                 data, error = post_query(question)
 
@@ -173,33 +314,11 @@ with tab_chat:
                     {"role": "assistant", "content": f"⚠️ {error}"}
                 )
             else:
-                top_score = data["sources"][0]["score"] if data["sources"] else 0.0
-                meta = {
-                    "strategy": data["retrieval_strategy"],
-                    "latency_ms": data["latency_ms"],
-                    "num_sources": len(data["sources"]),
-                    "top_score": top_score,
-                }
-                st.markdown(data["answer"])
-                st.caption(
-                    f"`{meta['strategy']}` · {meta['latency_ms']:.0f} ms · "
-                    f"{meta['num_sources']} sources · top score {top_score}"
-                )
-                with st.expander("📄 Sources"):
-                    for i, s in enumerate(data["sources"], 1):
-                        st.markdown(
-                            f"**[{i}] {s['source']}** — score `{s['score']}`\n\n"
-                            f"> {s['content'][:400]}{'…' if len(s['content']) > 400 else ''}"
-                        )
-
+                render_answer(data)
                 st.session_state.messages.append(
-                    {
-                        "role": "assistant",
-                        "content": data["answer"],
-                        "meta": meta,
-                        "sources": data["sources"],
-                    }
+                    {"role": "assistant", "content": data["answer"], "data": data}
                 )
+                top_score = data["sources"][0]["score"] if data["sources"] else 0.0
                 st.session_state.history.append(
                     {
                         "time": datetime.now().strftime("%H:%M:%S"),
@@ -208,6 +327,7 @@ with tab_chat:
                         "latency_ms": data["latency_ms"],
                         "sources": len(data["sources"]),
                         "top_score": top_score,
+                        "blocked": data.get("blocked", False),
                         "model": data["model"],
                     }
                 )

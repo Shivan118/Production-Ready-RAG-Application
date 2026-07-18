@@ -11,7 +11,9 @@ import logfire
 
 from app.config import get_settings
 from app.generation.generator import generate_answer
+from app.guardrails import rails
 from app.models.schemas import (
+    GuardrailReport,
     QueryRequest,
     QueryResponse,
     RetrievalStrategy,
@@ -73,16 +75,39 @@ def _retrieve(request: QueryRequest, k: int) -> list[SourceChunk]:
             return _retrieve_advanced(request.question, settings.fetch_k)
 
 
+def _blocked_response(
+    report: GuardrailReport, strategy_label: str, start: float
+) -> QueryResponse:
+    return QueryResponse(
+        answer=report.blocked_reason or "Your request was blocked by guardrails.",
+        sources=[],
+        model=get_settings().openai_chat_model,
+        retrieval_strategy=strategy_label,
+        latency_ms=round((time.perf_counter() - start) * 1000, 1),
+        blocked=True,
+        guardrails=report,
+    )
+
+
 def run_query(request: QueryRequest) -> QueryResponse:
     settings = get_settings()
     start = time.perf_counter()
     k = request.top_k or settings.top_k
 
     strategy_label = request.strategy.value
+    guardrails_on = settings.guardrails_enabled and request.use_guardrails
 
     with logfire.span(
         "rag_pipeline", question=request.question, strategy=strategy_label
     ) as span:
+        # --- input guardrails (may block before any retrieval/generation) ---
+        report = GuardrailReport()
+        if guardrails_on:
+            report = rails.check_input(request.question)
+            if not report.passed:
+                span.set_attribute("guardrail_blocked", True)
+                return _blocked_response(report, strategy_label, start)
+
         chunks = _retrieve(request, k)
 
         if request.use_rerank:
@@ -97,10 +122,16 @@ def run_query(request: QueryRequest) -> QueryResponse:
 
         answer = generate_answer(request.question, chunks)
 
+        # --- output guardrails (redact PII, optional grounding check) ---
+        grounded: bool | None = None
+        if guardrails_on:
+            answer, grounded = rails.apply_output(answer, chunks, report)
+
         latency_ms = round((time.perf_counter() - start) * 1000, 1)
         span.set_attribute("latency_ms", latency_ms)
         span.set_attribute("num_sources", len(chunks))
         span.set_attribute("final_strategy", strategy_label)
+        span.set_attribute("grounded", grounded)
 
         return QueryResponse(
             answer=answer,
@@ -108,4 +139,7 @@ def run_query(request: QueryRequest) -> QueryResponse:
             model=settings.openai_chat_model,
             retrieval_strategy=strategy_label,
             latency_ms=latency_ms,
+            blocked=False,
+            guardrails=report if guardrails_on else None,
+            grounded=grounded,
         )
