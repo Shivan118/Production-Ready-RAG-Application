@@ -48,12 +48,17 @@ def rerank(
         top_n=top_n,
         model=settings.cohere_rerank_model,
     ) as span:
-        response = client.rerank(
-            model=settings.cohere_rerank_model,
-            query=question,
-            documents=[c.content for c in chunks],
-            top_n=min(top_n, len(chunks)),
-        )
+        try:
+            response = client.rerank(
+                model=settings.cohere_rerank_model,
+                query=question,
+                documents=[c.content for c in chunks],
+                top_n=min(top_n, len(chunks)),
+            )
+        except Exception as e:  # noqa: BLE001 — rerank is an enhancement; degrade
+            logfire.warn("rerank_failed_falling_back", error=str(e))
+            return chunks[:top_n]
+
         reranked = [
             chunks[r.index].model_copy(
                 update={"score": round(r.relevance_score, 4)}

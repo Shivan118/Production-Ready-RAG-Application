@@ -11,7 +11,7 @@ An end-to-end Retrieval-Augmented Generation system built with **OpenAI + Chroma
 | 2.5 Frontend | Streamlit chatbot + session dashboard + document manager, sidebar API keys | ✅ |
 | 3. Graph RAG | Neo4j entity/relation extraction + graph-augmented retrieval | ✅ |
 | 4. Guardrails | Prompt-injection + moderation rails, Presidio PII detection/redaction, grounding check | ✅ |
-| 5. Evals | RAGAS golden dataset, per-strategy comparison | ⏳ |
+| 5. Evals | RAGAS golden dataset, per-strategy comparison, in-UI reports | ✅ |
 | 6. Ship | Custom metrics, Docker, CI | ⏳ |
 
 ## Architecture
@@ -64,6 +64,13 @@ Then set `NEO4J_URI` / `NEO4J_PASSWORD` in `.env`, restart the API, and re-inges
 
 ### Generation (`app/generation/`)
 - Answers **only** from retrieved context, with inline `[1]` `[2]` citations mapped to sources; refuses explicitly when context lacks the answer — **why:** grounding + verifiability are the whole point of RAG.
+
+### Evaluation (`app/evaluation/` + `evals/`) — Phase 5
+- **Golden dataset** (`evals/golden_dataset.json`): 12 Q&A pairs with reference answers, grounded in the indexed sample docs. **Why:** you can't improve what you can't measure — a fixed reference set makes retrieval changes comparable.
+- **RAGAS metrics** (all 0–1, higher is better): **faithfulness** (is the answer grounded in the retrieved context?), **answer relevancy** (does it address the question?), **context precision** (are retrieved chunks relevant/well-ranked?), **context recall** (did retrieval find everything the ground-truth answer needs?). Metrics are read back by each RAGAS metric's own `.name`, so the wrapper survives RAGAS's cross-version renames.
+- **Per-strategy comparison**: the runner executes the *real* pipeline for every (strategy × question) with guardrails off, collects answer + contexts, and scores them — so you see, e.g., whether `advanced` actually beats `hybrid` on faithfulness for your data.
+- **In the UI**: a dedicated **📈 Evals tab** — pick strategies + metrics + question count, run, and get an aggregate comparison table, a grouped per-metric bar chart, and per-question score breakdowns, all rendered in Streamlit. No notebook required.
+- Runs server-side via `POST /evals/run` (sync endpoint → threadpool, so RAGAS's asyncio loop doesn't clash with the server's).
 
 ### Guardrails (`app/guardrails/`) — Phase 4
 A defense-in-depth wrapper around the pipeline. **Input rails run before any retrieval/generation** (so a bad request costs nothing); **output rails transform/flag the answer**. Every rail is individually toggleable and degrades gracefully.
@@ -125,6 +132,8 @@ API docs: http://localhost:8000/docs · UI: http://localhost:8501
 | `POST /api/v1/query` | `{"question", "strategy", "top_k", "use_rerank", "use_compression", "use_guardrails"}` → answer, sources, `blocked`, `guardrails` report, `grounded` |
 | `GET /api/v1/documents` | List indexed files with chunk counts |
 | `DELETE /api/v1/documents/{filename}` | Remove one file everywhere: Chroma chunks, BM25, Neo4j graph data, stored upload |
+| `GET /api/v1/evals/dataset` | The golden Q&A dataset |
+| `POST /api/v1/evals/run` | Run RAGAS eval for selected strategies → per-strategy metric scores |
 | `GET /api/v1/health` | Status, chunks indexed, rerank/graph/guardrails status |
 
 Optional headers on any endpoint: `X-OpenAI-Api-Key`, `X-Cohere-Api-Key`.
@@ -148,9 +157,11 @@ app/
 ├── generation/            # grounded generation with citations
 ├── graph/                 # Neo4j client, entity/relation extractor, store, retriever
 ├── guardrails/            # injection, moderation, pii (Presidio), grounding, rails
+├── evaluation/            # golden dataset loader, RAGAS wrapper, per-strategy runner
 ├── pipeline.py            # orchestrator: guardrails → retrieve → rerank → compress → generate → guardrails
 ├── observability/         # Logfire setup + instrumentation
 └── api/                   # FastAPI app + routes
-frontend/app.py            # Streamlit chat + dashboard + documents
+evals/golden_dataset.json  # golden Q&A pairs for evaluation
+frontend/app.py            # Streamlit chat + dashboard + evals + documents
 tests/                     # offline unit tests (no API keys needed)
 ```
