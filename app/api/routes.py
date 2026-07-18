@@ -65,6 +65,12 @@ def _graph_stats() -> dict:
     return graph_stats()
 
 
+def _guardrails_status() -> dict:
+    from app.guardrails.rails import status
+
+    return status()
+
+
 @router.post("/ingest", response_model=IngestResponse)
 async def ingest(files: list[UploadFile]) -> IngestResponse:
     """Upload and index documents (.pdf, .txt, .md, .docx)."""
@@ -192,5 +198,6 @@ async def health() -> HealthResponse:
             "rerank_enabled": _rerank_enabled(),
             "rerank_model": settings.cohere_rerank_model,
             "graph": _graph_stats(),
+            "guardrails": _guardrails_status(),
         },
     )

@@ -50,6 +50,36 @@ class Settings(BaseSettings):
     )
     graph_max_hops: int = Field(2, ge=1, le=3)
 
+    # --- Guardrails ---
+    guardrails_enabled: bool = True
+    guardrail_injection: bool = True          # heuristic prompt-injection detection
+    guardrail_moderation: bool = True         # OpenAI moderation on the query
+    guardrail_input_pii: bool = True          # detect PII in the question
+    guardrail_output_pii: bool = True         # redact PII from the answer
+    guardrail_grounding: bool = False         # LLM faithfulness check (adds latency+cost)
+    block_on_input_pii: bool = False          # block vs. just flag PII in the query
+    pii_score_threshold: float = Field(0.5, ge=0.0, le=1.0)
+    pii_language: str = "en"
+    spacy_model: str = "en_core_web_sm"
+    # True-identity PII only. Deliberately excludes ORGANIZATION / DATE_TIME /
+    # URL / LOCATION / NRP — spaCy tags "OpenAI", "Transformer", dates as those,
+    # and redacting them would gut legitimate RAG answers.
+    pii_entities: list[str] = [
+        "PERSON",
+        "EMAIL_ADDRESS",
+        "PHONE_NUMBER",
+        "CREDIT_CARD",
+        "CRYPTO",
+        "IBAN_CODE",
+        "IP_ADDRESS",
+        "US_SSN",
+        "US_PASSPORT",
+        "US_DRIVER_LICENSE",
+        "US_BANK_NUMBER",
+        "US_ITIN",
+        "MEDICAL_LICENSE",
+    ]
+
     # --- Observability ---
     logfire_token: str = ""
 

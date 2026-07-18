@@ -32,6 +32,21 @@ class IngestResponse(BaseModel):
     latency_ms: float
 
 
+# ---------- Guardrails ----------
+
+class GuardrailCheck(BaseModel):
+    name: str                          # e.g. "prompt_injection", "output_pii"
+    passed: bool                       # True = clear, False = triggered
+    detail: str | None = None          # what triggered it
+
+
+class GuardrailReport(BaseModel):
+    passed: bool = True                # False if any input rail blocked the request
+    blocked_reason: str | None = None  # user-facing reason when blocked
+    checks: list[GuardrailCheck] = []
+    pii_detected: list[str] = []       # entity types found (input or output)
+
+
 # ---------- Query ----------
 
 class QueryRequest(BaseModel):
@@ -45,6 +60,9 @@ class QueryRequest(BaseModel):
     )
     use_compression: bool = Field(
         False, description="LLM-extract only relevant sentences from final chunks"
+    )
+    use_guardrails: bool = Field(
+        True, description="Run input/output guardrails (per-server config decides which)"
     )
 
     @field_validator("question")
@@ -68,6 +86,9 @@ class QueryResponse(BaseModel):
     model: str
     retrieval_strategy: str
     latency_ms: float
+    blocked: bool = False              # input guardrail refused the request
+    guardrails: GuardrailReport | None = None
+    grounded: bool | None = None       # output grounding verdict (if checked)
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )

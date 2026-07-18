@@ -20,6 +20,11 @@ posthog<6.0.0  # chromadb telemetry breaks with posthog>=6
 # --- Phase 3: Graph RAG ---
 neo4j==5.28.1
 
+# --- Phase 4: Guardrails (PII). Also run: python -m spacy download en_core_web_sm ---
+presidio-analyzer==2.2.363
+presidio-anonymizer==2.2.363
+spacy==3.8.13
+
 # --- Phase 2: advanced retrieval ---
 rank-bm25==0.2.2
 cohere==5.15.0
