@@ -17,6 +17,7 @@ from app.models.schemas import (
     RetrievalStrategy,
     SourceChunk,
 )
+from app.graph import retriever as graph_retriever
 from app.retrieval import (
     compression,
     dense,
@@ -30,7 +31,7 @@ from app.retrieval.fusion import rrf_fuse
 
 
 def _retrieve_advanced(question: str, fetch_k: int) -> list[SourceChunk]:
-    """Multi-query variants + HyDE passage, each through hybrid search, RRF-fused."""
+    """Multi-query variants + HyDE passage + graph results, RRF-fused."""
     settings = get_settings()
     queries = [question] + multi_query.generate_variants(question)
     result_lists = [
@@ -40,6 +41,9 @@ def _retrieve_advanced(question: str, fetch_k: int) -> list[SourceChunk]:
     result_lists.append(
         hybrid.retrieve(question, top_k=fetch_k, dense_query=passage)
     )
+    graph_results = graph_retriever.retrieve(question, top_k=fetch_k)
+    if graph_results:
+        result_lists.append(graph_results)
     return rrf_fuse(result_lists, top_n=settings.fetch_k)
 
 
@@ -63,6 +67,8 @@ def _retrieve(request: QueryRequest, k: int) -> list[SourceChunk]:
             return query_expansion.retrieve(request.question, top_k=pool)
         case RetrievalStrategy.SELF_QUERY:
             return self_query.retrieve(request.question, top_k=pool)
+        case RetrievalStrategy.GRAPH:
+            return graph_retriever.retrieve(request.question, top_k=pool)
         case RetrievalStrategy.ADVANCED:
             return _retrieve_advanced(request.question, settings.fetch_k)
 

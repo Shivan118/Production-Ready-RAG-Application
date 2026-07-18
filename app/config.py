@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     cohere_api_key: str = ""
     cohere_rerank_model: str = "rerank-v3.5"
 
+    # --- Neo4j (Graph RAG) ---
+    neo4j_uri: str = ""
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = ""
+    graph_extraction_on_ingest: bool = Field(
+        True, description="Extract entities/relations into Neo4j during /ingest"
+    )
+    graph_max_hops: int = Field(2, ge=1, le=3)
+
     # --- Observability ---
     logfire_token: str = ""
 
