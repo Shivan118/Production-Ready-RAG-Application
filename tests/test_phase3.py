@@ -4,7 +4,6 @@ without Neo4j. All offline."""
 import os
 
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-0000000000")
-os.environ["NEO4J_URI"] = ""  # force graph-disabled paths
 
 from app.graph import client as graph_client  # noqa: E402
 from app.graph.extractor import (  # noqa: E402
@@ -38,19 +37,18 @@ class TestExtractionSchemas:
 
 
 class TestGracefulDegradation:
-    def test_driver_none_without_uri(self):
-        graph_client.reset()
+    """`graph_disabled` (conftest) forces Neo4j off regardless of .env."""
+
+    def test_driver_none_without_uri(self, graph_disabled):
         assert graph_client.get_driver() is None
         assert graph_client.is_enabled() is False
 
-    def test_stats_disabled(self):
-        graph_client.reset()
+    def test_stats_disabled(self, graph_disabled):
         stats = graph_stats()
         assert stats["enabled"] is False
         assert stats["entities"] == 0
 
-    def test_graph_retrieve_returns_empty(self):
-        graph_client.reset()
+    def test_graph_retrieve_returns_empty(self, graph_disabled):
         from app.graph.retriever import retrieve
 
         assert retrieve("who proposed the transformer?") == []

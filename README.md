@@ -140,9 +140,41 @@ Optional headers on any endpoint: `X-OpenAI-Api-Key`, `X-Cohere-Api-Key`.
 
 ## Tests
 
+Keys/config are loaded from `.env` only (via `tests/conftest.py`) — nothing hardcoded.
+
+### Offline unit tests (fast, no network, no cost)
+
 ```bash
-pytest tests/ -v      # 45 tests: config, schemas, chunking, RRF, graph, guardrails
+pytest              # 55 tests: config, schemas, chunking, RRF, graph, guardrails, evals
 ```
+
+### Live end-to-end tests (real OpenAI / Cohere / Neo4j, ~3 min, costs tokens)
+
+Exercises **every phase** against the live APIs using your `.env` keys. Auto-skipped
+when no real `OPENAI_API_KEY` is set; individual tests skip when their dependency
+(Neo4j, Cohere, indexed docs) isn't configured.
+
+```bash
+pytest -m live              # all phases end-to-end (19 tests)
+pytest -m live -v           # verbose, per-test
+
+# run a single phase:
+pytest -m live -k Phase1    # foundation: health + ingest→query→delete
+pytest -m live -k Phase2    # all 6 retrieval strategies + rerank + compression
+pytest -m live -k Phase3    # Graph RAG (Neo4j)
+pytest -m live -k Phase4    # guardrails: injection, moderation, PII in/out, opt-out
+pytest -m live -k Phase5    # RAGAS evaluation
+
+pytest                      # everything offline (live auto-deselected)
+```
+
+| Live coverage | What it verifies |
+|---|---|
+| Phase 1 | Health; ingest a doc → retrieve it → delete it (Chroma + BM25 + Neo4j + file) |
+| Phase 2 | `dense`, `hybrid`, `multi_query`, `hyde`, `self_query`, `advanced` all answer; Cohere rerank + compression applied |
+| Phase 3 | Graph is populated; `graph` strategy answers from Neo4j traversal |
+| Phase 4 | Injection blocked, violent content blocked by moderation, PII flagged (input) + redacted (output), opt-out works |
+| Phase 5 | Golden dataset served; real RAGAS run returns valid metric scores |
 
 ## Project Structure
 
