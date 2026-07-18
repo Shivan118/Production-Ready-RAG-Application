@@ -24,6 +24,12 @@ router = APIRouter()
 UPLOAD_DIR = Path("data/uploads")
 
 
+def _rerank_enabled() -> bool:
+    from app.retrieval.reranker import is_enabled
+
+    return is_enabled()
+
+
 @router.post("/ingest", response_model=IngestResponse)
 async def ingest(files: list[UploadFile]) -> IngestResponse:
     """Upload and index documents (.pdf, .txt, .md, .docx)."""
@@ -91,5 +97,7 @@ async def health() -> HealthResponse:
         details={
             "chat_model": settings.openai_chat_model,
             "embedding_model": settings.openai_embedding_model,
+            "rerank_enabled": _rerank_enabled(),
+            "rerank_model": settings.cohere_rerank_model,
         },
     )

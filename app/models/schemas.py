@@ -1,9 +1,19 @@
 """Pydantic request/response schemas for the API layer."""
 
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
+
+
+class RetrievalStrategy(str, Enum):
+    DENSE = "dense"                # plain semantic top-k
+    HYBRID = "hybrid"              # dense + BM25, RRF-fused
+    MULTI_QUERY = "multi_query"    # N rephrasings -> hybrid -> RRF
+    HYDE = "hyde"                  # hypothetical document embedding
+    SELF_QUERY = "self_query"      # LLM-extracted metadata filters
+    ADVANCED = "advanced"          # multi-query + HyDE -> hybrid -> RRF
 
 
 # ---------- Ingestion ----------
@@ -26,6 +36,15 @@ class IngestResponse(BaseModel):
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=3, max_length=2000)
     top_k: int | None = Field(None, ge=1, le=20, description="Override default top_k")
+    strategy: RetrievalStrategy = Field(
+        RetrievalStrategy.ADVANCED, description="Retrieval strategy to use"
+    )
+    use_rerank: bool = Field(
+        True, description="Apply Cohere rerank to candidates (skipped if no key)"
+    )
+    use_compression: bool = Field(
+        False, description="LLM-extract only relevant sentences from final chunks"
+    )
 
     @field_validator("question")
     @classmethod
@@ -46,7 +65,7 @@ class QueryResponse(BaseModel):
     answer: str
     sources: list[SourceChunk]
     model: str
-    retrieval_strategy: str = "dense"
+    retrieval_strategy: str
     latency_ms: float
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)

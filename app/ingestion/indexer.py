@@ -24,6 +24,7 @@ def get_vectorstore() -> Chroma:
         embedding_function=_embeddings(),
         persist_directory=str(settings.chroma_persist_dir),
         client_settings=ChromaSettings(anonymized_telemetry=False),
+        collection_metadata={"hnsw:space": "cosine"},
     )
 
 
@@ -46,6 +47,11 @@ def index_file(path: Path) -> int:
         # chunk_id as the Chroma ID makes re-ingesting the same file idempotent
         ids = [c.metadata["chunk_id"] for c in chunks]
         vectorstore.add_documents(chunks, ids=ids)
+
+        # keep the in-memory BM25 index in sync with the collection
+        from app.retrieval.hybrid import invalidate_bm25
+
+        invalidate_bm25()
         span.set_attribute("chunks_indexed", len(chunks))
         return len(chunks)
 

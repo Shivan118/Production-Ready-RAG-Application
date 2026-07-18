@@ -17,6 +17,11 @@ openai==1.78.1
 chromadb
 posthog<6.0.0  # chromadb telemetry breaks with posthog>=6
 
+# --- Phase 2: advanced retrieval ---
+rank-bm25==0.2.2
+cohere==5.15.0
+lark==1.2.2
+
 # --- Document loading ---
 pypdf==5.5.0
 docx2txt==0.9

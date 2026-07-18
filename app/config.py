@@ -34,6 +34,12 @@ class Settings(BaseSettings):
 
     # --- Retrieval ---
     top_k: int = Field(5, ge=1, le=50)
+    fetch_k: int = Field(20, ge=5, le=100, description="Candidate pool before rerank/fusion")
+    multi_query_count: int = Field(3, ge=1, le=5)
+
+    # --- Cohere Rerank ---
+    cohere_api_key: str = ""
+    cohere_rerank_model: str = "rerank-v3.5"
 
     # --- Observability ---
     logfire_token: str = ""
