@@ -9,7 +9,7 @@ An end-to-end Retrieval-Augmented Generation system built with **OpenAI + Chroma
 | 1. Foundation | Config, ingestion → ChromaDB, dense retrieval, generation, FastAPI, Logfire | ✅ |
 | 2. Advanced retrieval | Hybrid+RRF, multi-query, HyDE, self-query, compression, Cohere rerank | ✅ |
 | 2.5 Frontend | Streamlit chatbot + session dashboard + document manager, sidebar API keys | ✅ |
-| 3. Graph RAG | Neo4j entity/relation extraction + graph-augmented retrieval | ⏳ |
+| 3. Graph RAG | Neo4j entity/relation extraction + graph-augmented retrieval | ✅ |
 | 4. Guardrails | Prompt-injection + topic rails, Presidio PII detection/redaction | ⏳ |
 | 5. Evals | RAGAS golden dataset, per-strategy comparison | ⏳ |
 | 6. Ship | Custom metrics, Docker, CI | ⏳ |
@@ -42,7 +42,21 @@ An end-to-end Retrieval-Augmented Generation system built with **OpenAI + Chroma
 | `multi_query` | LLM rephrases the question 3 ways → hybrid each → RRF | Users and documents use different vocabulary; multiple phrasings raise recall |
 | `hyde` | LLM writes a hypothetical answer passage, embeds *that* for dense search | Documents match documents better than questions match documents |
 | `self_query` | LLM extracts metadata filters ("in attention.pdf" → `source='attention.pdf'`) | Natural-language constraints become real filters instead of hoping similarity finds the right file |
-| `advanced` (default) | multi-query + HyDE → hybrid → RRF over all lists | Maximum recall pass feeding the reranker |
+| `graph` | Query entities → Neo4j traversal → relation facts + linked chunks | Answers multi-hop questions ("who proposed X and where do they work?") that similarity search can't connect |
+| `advanced` (default) | multi-query + HyDE + graph → hybrid → RRF over all lists | Maximum recall pass feeding the reranker |
+
+### Graph RAG (`app/graph/`) — Phase 3
+- **Ingest-time extraction**: an LLM (structured output) pulls entities (`Person`, `Technology`, `Concept`, …) and relations (`PROPOSED`, `USES`, …) from each chunk into Neo4j: `(:Entity)-[:REL]->(:Entity)` plus `(:Entity)-[:MENTIONED_IN]->(:Chunk)` — **why:** vector search finds *similar text*; a graph finds *connected facts* across documents.
+- **Query time**: entities spotted in the question → up to 2-hop traversal → triples returned as a "knowledge graph facts" context block + the real chunks those entities appear in (hydrated from Chroma).
+- **MERGE everywhere** → re-ingestion never duplicates graph data. Relationship types stored as properties → no Cypher injection.
+- **Graceful**: no `NEO4J_URI` → graph strategy returns a clear `503`, `advanced` silently skips graph, everything else unaffected.
+
+**Start Neo4j** (pick one):
+```bash
+docker compose up -d      # local, needs Docker Desktop; browser at http://localhost:7474
+# or create a free instance at https://neo4j.com/product/auradb/ (no install)
+```
+Then set `NEO4J_URI` / `NEO4J_PASSWORD` in `.env`, restart the API, and re-ingest your documents to populate the graph.
 
 ### Post-retrieval (`use_rerank`, `use_compression` flags)
 - **Cohere Rerank (`rerank-v3.5`)** — a cross-encoder reads query+chunk *together*, far more accurate than vector similarity. **Why the wide-then-narrow design:** retrieval casts a wide net (fetch_k=20 candidates), the reranker picks the truly relevant top-k. Degrades gracefully — no Cohere key → candidates pass through with a logged warning, the API never breaks.
@@ -92,7 +106,9 @@ API docs: http://localhost:8000/docs · UI: http://localhost:8501
 |---|---|
 | `POST /api/v1/ingest` | Upload `.pdf` / `.txt` / `.md` / `.docx` (multipart) |
 | `POST /api/v1/query` | `{"question", "strategy", "top_k", "use_rerank", "use_compression"}` |
-| `GET /api/v1/health` | Status, chunks indexed, rerank enabled |
+| `GET /api/v1/documents` | List indexed files with chunk counts |
+| `DELETE /api/v1/documents/{filename}` | Remove one file everywhere: Chroma chunks, BM25, Neo4j graph data, stored upload |
+| `GET /api/v1/health` | Status, chunks indexed, rerank/graph enabled |
 
 Optional headers on any endpoint: `X-OpenAI-Api-Key`, `X-Cohere-Api-Key`.
 

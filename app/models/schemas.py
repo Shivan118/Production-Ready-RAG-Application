@@ -13,7 +13,8 @@ class RetrievalStrategy(str, Enum):
     MULTI_QUERY = "multi_query"    # N rephrasings -> hybrid -> RRF
     HYDE = "hyde"                  # hypothetical document embedding
     SELF_QUERY = "self_query"      # LLM-extracted metadata filters
-    ADVANCED = "advanced"          # multi-query + HyDE -> hybrid -> RRF
+    GRAPH = "graph"                # Neo4j entity traversal + linked chunks
+    ADVANCED = "advanced"          # multi-query + HyDE + graph -> RRF
 
 
 # ---------- Ingestion ----------
@@ -70,6 +71,25 @@ class QueryResponse(BaseModel):
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
+
+
+# ---------- Documents ----------
+
+class DocumentInfo(BaseModel):
+    source: str
+    chunks: int
+
+
+class DocumentsResponse(BaseModel):
+    documents: list[DocumentInfo]
+    total_chunks: int
+
+
+class DeleteResponse(BaseModel):
+    filename: str
+    chunks_deleted: int
+    graph_chunks_deleted: int = 0
+    file_removed: bool
 
 
 # ---------- Health ----------

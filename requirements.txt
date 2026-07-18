@@ -17,6 +17,9 @@ openai==1.78.1
 chromadb
 posthog<6.0.0  # chromadb telemetry breaks with posthog>=6
 
+# --- Phase 3: Graph RAG ---
+neo4j==5.28.1
+
 # --- Phase 2: advanced retrieval ---
 rank-bm25==0.2.2
 cohere==5.15.0

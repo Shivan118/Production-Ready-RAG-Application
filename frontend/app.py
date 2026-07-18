@@ -14,7 +14,7 @@ st.set_page_config(page_title="RAG End-to-End", page_icon="🔎", layout="wide")
 
 ACCENT = "#2a78d6"  # categorical slot 1 (validated palette)
 LOGFIRE_URL = "https://logfire-us.pydantic.dev/shivan3446/starter-project"
-STRATEGIES = ["advanced", "hybrid", "dense", "multi_query", "hyde", "self_query"]
+STRATEGIES = ["advanced", "hybrid", "dense", "multi_query", "hyde", "self_query", "graph"]
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -122,6 +122,14 @@ with st.sidebar:
         rerank_on = health["details"].get("rerank_enabled", False)
         if st.session_state.use_rerank and not rerank_on and not st.session_state.cohere_key:
             st.warning("Rerank is ON but no Cohere key is configured — it will be skipped.")
+        graph = health["details"].get("graph", {})
+        if graph.get("enabled"):
+            st.info(
+                f"🕸️ Graph: {graph['entities']} entities · "
+                f"{graph['relations']} relations"
+            )
+        elif st.session_state.strategy in ("graph", "advanced"):
+            st.caption("🕸️ Neo4j not connected — graph retrieval inactive.")
     else:
         st.error("Backend offline — start it:\n`uvicorn app.api.main:app --reload`")
 
@@ -240,10 +248,52 @@ with tab_dash:
         )
 
 
+def get_documents() -> list[dict]:
+    try:
+        r = requests.get(f"{backend()}/documents", headers=api_headers(), timeout=10)
+        return r.json()["documents"] if r.ok else []
+    except requests.RequestException:
+        return []
+
+
+def delete_document(source: str) -> tuple[dict | None, str | None]:
+    try:
+        r = requests.delete(
+            f"{backend()}/documents/{source}", headers=api_headers(), timeout=60
+        )
+    except requests.RequestException as e:
+        return None, str(e)
+    if not r.ok:
+        try:
+            return None, r.json().get("detail", r.text)
+        except ValueError:
+            return None, r.text
+    return r.json(), None
+
+
 with tab_docs:
     health = get_health()
     if health:
         st.metric("Chunks indexed", health["documents_indexed"])
+
+    docs = get_documents()
+    if docs:
+        st.markdown("**Indexed documents**")
+        for d in docs:
+            col_name, col_chunks, col_del = st.columns([5, 2, 2])
+            col_name.markdown(f"📄 `{d['source']}`")
+            col_chunks.caption(f"{d['chunks']} chunks")
+            if col_del.button("🗑️ Delete", key=f"del_{d['source']}"):
+                result, error = delete_document(d["source"])
+                if error:
+                    st.error(error)
+                else:
+                    st.toast(
+                        f"Deleted {result['filename']} — "
+                        f"{result['chunks_deleted']} chunks removed"
+                    )
+                    st.rerun()
+        st.divider()
 
     uploads = st.file_uploader(
         "Upload documents (.pdf, .txt, .md, .docx)",
