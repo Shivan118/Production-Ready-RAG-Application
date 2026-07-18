@@ -29,8 +29,8 @@ _METADATA_FIELDS = [
 _CONTENT_DESCRIPTION = "Text chunks from the user's uploaded documents"
 
 
-@lru_cache
-def _retriever() -> SelfQueryRetriever:
+@lru_cache(maxsize=8)
+def _retriever_for(api_key: str) -> SelfQueryRetriever:
     settings = get_settings()
     return SelfQueryRetriever.from_llm(
         llm=_llm(),
@@ -40,6 +40,12 @@ def _retriever() -> SelfQueryRetriever:
         search_kwargs={"k": settings.top_k},
         verbose=False,
     )
+
+
+def _retriever() -> SelfQueryRetriever:
+    from app.runtime_keys import effective_openai_key
+
+    return _retriever_for(effective_openai_key())
 
 
 def retrieve(question: str, top_k: int | None = None) -> list[SourceChunk]:

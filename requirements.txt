@@ -29,6 +29,10 @@ docx2txt==0.9
 # --- Observability (Pydantic Logfire) ---
 logfire[fastapi]==3.15.1
 
+# --- Frontend ---
+streamlit==1.45.1
+requests==2.32.3
+
 # --- Testing ---
 pytest==8.3.5
 httpx==0.28.1

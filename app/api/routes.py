@@ -5,7 +5,8 @@ import time
 from pathlib import Path
 
 import logfire
-from fastapi import APIRouter, HTTPException, UploadFile
+import openai
+from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile
 
 from app.config import get_settings
 from app.ingestion.indexer import document_count, index_file
@@ -18,8 +19,21 @@ from app.models.schemas import (
     QueryResponse,
 )
 from app.pipeline import run_query
+from app.runtime_keys import cohere_key_override, openai_key_override
 
-router = APIRouter()
+
+async def apply_key_overrides(
+    x_openai_api_key: str | None = Header(None),
+    x_cohere_api_key: str | None = Header(None),
+) -> None:
+    """Let clients (e.g. the Streamlit UI) supply their own API keys per request."""
+    if x_openai_api_key and x_openai_api_key.strip():
+        openai_key_override.set(x_openai_api_key.strip())
+    if x_cohere_api_key and x_cohere_api_key.strip():
+        cohere_key_override.set(x_cohere_api_key.strip())
+
+
+router = APIRouter(dependencies=[Depends(apply_key_overrides)])
 
 UPLOAD_DIR = Path("data/uploads")
 
@@ -83,7 +97,10 @@ async def query(request: QueryRequest) -> QueryResponse:
             status_code=409,
             detail="No documents indexed yet. Upload files via /ingest first.",
         )
-    return run_query(request)
+    try:
+        return run_query(request)
+    except openai.AuthenticationError:
+        raise HTTPException(status_code=401, detail="Invalid OpenAI API key")
 
 
 @router.get("/health", response_model=HealthResponse)

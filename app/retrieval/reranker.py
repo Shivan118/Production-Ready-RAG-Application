@@ -13,12 +13,16 @@ from app.config import get_settings
 from app.models.schemas import SourceChunk
 
 
-@lru_cache
+@lru_cache(maxsize=8)
+def _client_for(api_key: str) -> cohere.ClientV2:
+    return cohere.ClientV2(api_key=api_key)
+
+
 def _client() -> cohere.ClientV2 | None:
-    settings = get_settings()
-    if not settings.cohere_api_key:
-        return None
-    return cohere.ClientV2(api_key=settings.cohere_api_key)
+    from app.runtime_keys import effective_cohere_key
+
+    key = effective_cohere_key()
+    return _client_for(key) if key else None
 
 
 def is_enabled() -> bool:

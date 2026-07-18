@@ -12,9 +12,17 @@ from app.generation.generator import _llm
 from app.models.schemas import SourceChunk
 
 
-@lru_cache
+@lru_cache(maxsize=8)
+def _compressor_for(api_key: str) -> LLMChainExtractor:
+    from app.generation.generator import _llm_for
+
+    return LLMChainExtractor.from_llm(_llm_for(api_key))
+
+
 def _compressor() -> LLMChainExtractor:
-    return LLMChainExtractor.from_llm(_llm())
+    from app.runtime_keys import effective_openai_key
+
+    return _compressor_for(effective_openai_key())
 
 
 def compress(question: str, chunks: list[SourceChunk]) -> list[SourceChunk]:
